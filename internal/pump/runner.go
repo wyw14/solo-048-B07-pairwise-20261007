@@ -17,7 +17,22 @@ func NewRunner() *Runner {
 	return &Runner{running: make(map[string]bool), ticks: make(map[string]int)}
 }
 
-func (r *Runner) Circulate(ctx context.Context, stationID string, interval time.Duration, started chan<- struct{}) error {
+// signalStart reports a startup result to the waiter. Success is signalled by
+// closing the channel (delivers nil like a ready signal); a failure sends the
+// error. Callers must create started with capacity one so the send never blocks
+// when the waiter has already given up.
+func signalStart(started chan<- error, err error) {
+	if started == nil {
+		return
+	}
+	if err != nil {
+		started <- err
+		return
+	}
+	close(started)
+}
+
+func (r *Runner) Circulate(ctx context.Context, stationID string, interval time.Duration, started chan<- error) error {
 	if stationID == "" {
 		return fmt.Errorf("station id is required")
 	}
@@ -27,7 +42,9 @@ func (r *Runner) Circulate(ctx context.Context, stationID string, interval time.
 	r.mu.Lock()
 	if r.running[stationID] {
 		r.mu.Unlock()
-		return fmt.Errorf("station %s circulation already active", stationID)
+		err := fmt.Errorf("station %s circulation already active", stationID)
+		signalStart(started, err)
+		return err
 	}
 	r.running[stationID] = true
 	r.mu.Unlock()
@@ -36,9 +53,9 @@ func (r *Runner) Circulate(ctx context.Context, stationID string, interval time.
 		delete(r.running, stationID)
 		r.mu.Unlock()
 	}()
-	if started != nil {
-		close(started)
-	}
+	// A closed channel delivers the zero value (nil) exactly like a success
+	// signal; failures send the error first.
+	signalStart(started, nil)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

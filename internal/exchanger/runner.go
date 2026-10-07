@@ -19,7 +19,7 @@ func NewCirculationRunner(pumps *pump.Runner) *CirculationRunner {
 	return &CirculationRunner{pumps: pumps, errors: make(map[string]error)}
 }
 
-func (r *CirculationRunner) Run(ctx context.Context, stationID string, started chan<- struct{}) {
+func (r *CirculationRunner) Run(ctx context.Context, stationID string, started chan<- error) {
 	if err := r.pumps.Circulate(ctx, stationID, 5*time.Millisecond, started); err != nil && ctx.Err() == nil {
 		r.mu.Lock()
 		r.errors[stationID] = fmt.Errorf("antifreeze circulation: %w", err)
