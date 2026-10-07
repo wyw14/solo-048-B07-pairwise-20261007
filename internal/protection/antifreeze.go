@@ -49,17 +49,42 @@ func (a *Antifreeze) Start(requestContext context.Context, stationID string) (An
 	current := &activeAntifreeze{session: session, cancel: cancel, done: make(chan struct{})}
 	a.active[stationID] = current
 	a.mu.Unlock()
-	started := make(chan struct{})
+
+	// Buffered: the worker must always be able to report its startup result,
+	// even if Start has already timed out and stopped listening.
+	ready := make(chan error, 1)
 	go func() {
 		defer close(current.done)
-		a.runner.Run(ctx, stationID, started)
+		a.runner.Run(ctx, stationID, ready)
 	}()
+
 	select {
-	case <-started:
-		return session, nil
+	case err := <-ready:
+		if err == nil {
+			return session, nil
+		}
+		a.release(stationID, current)
+		return AntifreezeSession{}, fmt.Errorf("antifreeze circulation did not start: %w", err)
 	case <-time.After(time.Second):
 		cancel()
+		a.release(stationID, current)
 		return AntifreezeSession{}, fmt.Errorf("antifreeze circulation did not start")
+	}
+}
+
+// release removes a failed/timed-out session reservation and waits for its
+// worker to exit. It only removes the entry if it still belongs to this
+// reservation, so a concurrent Stop is never undone and a later session for
+// the same station is never evicted.
+func (a *Antifreeze) release(stationID string, current *activeAntifreeze) {
+	a.mu.Lock()
+	if a.active[stationID] == current {
+		delete(a.active, stationID)
+	}
+	a.mu.Unlock()
+	select {
+	case <-current.done:
+	case <-time.After(time.Second):
 	}
 }
 

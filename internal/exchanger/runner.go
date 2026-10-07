@@ -19,12 +19,17 @@ func NewCirculationRunner(pumps *pump.Runner) *CirculationRunner {
 	return &CirculationRunner{pumps: pumps, errors: make(map[string]error)}
 }
 
-func (r *CirculationRunner) Run(ctx context.Context, stationID string, started chan<- struct{}) {
-	if err := r.pumps.Circulate(ctx, stationID, 5*time.Millisecond, started); err != nil && ctx.Err() == nil {
-		r.mu.Lock()
+// Run drives a single circulation session. It forwards the pump's startup
+// result (nil or an error) on ready exactly once.
+func (r *CirculationRunner) Run(ctx context.Context, stationID string, ready chan<- error) {
+	err := r.pumps.Circulate(ctx, stationID, 5*time.Millisecond, ready)
+	r.mu.Lock()
+	if err != nil && ctx.Err() == nil {
 		r.errors[stationID] = fmt.Errorf("antifreeze circulation: %w", err)
-		r.mu.Unlock()
+	} else {
+		delete(r.errors, stationID)
 	}
+	r.mu.Unlock()
 }
 
 func (r *CirculationRunner) Running(stationID string) bool {
